@@ -1,0 +1,19 @@
+{
+  "id": "./index.html",
+  "name": "Medicine Order",
+  "short_name": "MedOrder",
+  "description": "Upload a medicine price list in Excel, enter order quantities and send the order as a PDF on WhatsApp.",
+  "lang": "en",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#0277bd",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

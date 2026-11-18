@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0277bd">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<title>Medicine Order</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+<style>
+body{font-family:Arial,sans-serif;padding:16px;margin:0}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border:1px solid #ccc;padding:6px;text-align:center}
+th{background:#f2f2f2;cursor:pointer;user-select:none;position:sticky;top:0}
+th:hover{background:#e0e0e0}
+input[type=number]{width:70px}
+button{padding:10px 15px;margin-top:15px;cursor:pointer}
+.control-panel{display:flex;gap:12px;margin-bottom:15px;align-items:center;flex-wrap:wrap}
+.control-panel input[type=text]{padding:8px;width:250px;font-size:14px;border:1px solid #ccc;border-radius:4px}
+.total-box{padding:8px 15px;background:#e1f5fe;border:1px solid #b3e5fc;border-radius:4px;font-weight:bold;color:#0277bd}
+.draft-status{display:none;padding:10px 12px;margin-bottom:12px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:5px;color:#2e7d32;font-weight:bold}
+.draft-buttons{display:none;gap:10px;margin-bottom:12px}
+.draft-buttons button{margin-top:0}
+.resume-btn{background:#2e7d32;color:#fff;border:none}
+.new-order-btn{background:#c62828;color:#fff;border:none}
+.send-btn{background:#25d366;color:#fff;border:none;border-radius:6px;font-weight:bold}
+#saveStatus{font-size:12px;color:#777}
+#info{font-size:13px;color:#555;margin-bottom:8px}
+.mobile-card{border:1px solid #ccc;padding:10px;margin-bottom:10px;border-radius:6px;background:#fafafa}
+.mobile-card h4{margin:0 0 5px;font-size:16px}
+.mobile-card p{margin:3px 0;font-size:14px}
+.mobile-card input{width:100%;box-sizing:border-box;padding:8px;font-size:16px;margin-top:6px}
+#mobileView{display:none}
+@media(max-width:768px){
+ table{display:none}
+ #mobileView{display:block}
+ .control-panel{flex-direction:column;align-items:stretch}
+ .control-panel input[type=text]{width:100%;box-sizing:border-box}
+ .total-box{text-align:center}
+ button{width:100%;font-size:18px}
+ .draft-buttons{flex-direction:column}
+}
+</style>
+</head>
+<body>
+<h2>💊 Medicine Order System</h2>
+<div id="draftStatus" class="draft-status">💾 Previous order draft is available.</div>
+<div id="draftButtons" class="draft-buttons">
+  <button class="resume-btn" id="resumeBtn">▶️ Resume Previous Order</button>
+  <button class="new-order-btn" id="newBtn">🆕 Start New Order</button>
+</div>
+<div class="control-panel">
+  <input type="file" id="upload" accept=".xlsx,.xls">
+  <input type="text" id="searchBox" placeholder="🔍 Search Medicine or Description...">
+  <div class="total-box">Total Amount: ₹<span id="totalAmount">0.00</span></div>
+  <span id="saveStatus"></span>
+</div>
+<div id="info"></div>
+<table id="table">
+<thead><tr>
+<th data-f="name">Product ↕</th><th data-f="desc">Description ↕</th><th data-f="pack">Packing ↕</th>
+<th data-f="mrp">MRP ↕</th><th data-f="rate">Rate ↕</th><th data-f="scheme">Scheme ↕</th><th>Order Qty</th>
+</tr></thead>
+<tbody></tbody>
+</table>
+<div id="mobileView"></div>
+<button class="send-btn" id="sendBtn">📲 Send WhatsApp + PDF</button>
+
+<script>
+/* ---------- SETTINGS ---------- */
+const WHATSAPP_PHONE = "919877659203";
+const DRAFT_KEY = "janaushadhi_medicine_order_draft_v2";
+const DATA_KEY  = "janaushadhi_medicine_order_items_v2";
+
+let items = [];          // parsed products
+let qty = {};            // key -> quantity (key is product-based, not row-based)
+let sortField = null, sortAsc = true;
+const $ = id => document.getElementById(id);
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+/* ---------- STORAGE (all wrapped, never crashes) ---------- */
+function lsGet(k){ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch(e){ return false; } }
+
+let saveTimer;
+function saveDraft(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(()=>{
+    if(lsSet(DRAFT_KEY,{qty, searchText:$("searchBox").value, savedAt:new Date().toISOString()})){
+      $("saveStatus").innerText="✓ Saved";
+      setTimeout(()=>$("saveStatus").innerText="",1200);
+    }
+  },300);
+}
+
+function showDraftPrompt(){
+  const d = lsGet(DRAFT_KEY);
+  const has = d && d.qty && Object.keys(d.qty).length>0 && Object.keys(qty).length===0;
+  $("draftStatus").style.display = has ? "block":"none";
+  $("draftButtons").style.display = has ? "flex":"none";
+}
+
+$("resumeBtn").onclick = ()=>{
+  const d = lsGet(DRAFT_KEY);
+  if(!d){ alert("No previous order found."); return; }
+  qty = d.qty || {};
+  $("searchBox").value = d.searchText || "";
+  showDraftPrompt(); render();
+};
+$("newBtn").onclick = ()=>{
+  if(!confirm("Are you sure you want to delete the previous draft and start a new order?")) return;
+  try{ localStorage.removeItem(DRAFT_KEY);}catch(e){}
+  qty = {}; $("searchBox").value="";
+  showDraftPrompt(); render();
+};
+
+/* ---------- EXCEL ---------- */
+function parseSheet(rows){
+  let start = 7;
+  for(let i=0;i<rows.length;i++){
+    if(rows[i][0] && rows[i][0].toString().toLowerCase().includes("product")){ start=i+1; break; }
+  }
+  const out=[], seen={};
+  for(let i=start;i<rows.length;i++){
+    const r=rows[i];
+    if(!r || !r[0]) continue;
+    let key=[r[0],r[1],r[2]].map(x=>String(x).trim().toLowerCase()).join("|");
+    if(seen[key]){ seen[key]++; key+="#"+seen[key]; } else seen[key]=1;
+    out.push({key,name:r[0],desc:r[1],pack:r[2],mrp:r[4],rate:r[5],scheme:r[6]});
+  }
+  return out;
+}
+
+$("upload").addEventListener("change", e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=evt=>{
+    try{
+      const wb=XLSX.read(evt.target.result,{type:"array"});
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""});
+      items=parseSheet(rows);
+      if(!items.length){ alert("Excel madhe products sapadle nahit."); return; }
+      lsSet(DATA_KEY,{items, fileName:file.name, savedAt:new Date().toISOString()});
+      $("info").innerText = `${items.length} products loaded (${file.name})`;
+      showDraftPrompt(); render();
+    }catch(err){ console.error(err); alert("Excel file vachta aali nahi."); }
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+/* ---------- RENDER ---------- */
+function render(){
+  const term=$("searchBox").value.toLowerCase();
+  let list=items.map((it,i)=>({it,i})).filter(({it})=>
+    String(it.name).toLowerCase().includes(term) || String(it.desc).toLowerCase().includes(term));
+
+  if(sortField){
+    list.sort((a,b)=>{
+      let x=a.it[sortField], y=b.it[sortField];
+      const nx=parseFloat(x), ny=parseFloat(y);
+      if(!isNaN(nx)&&!isNaN(ny)) return sortAsc?nx-ny:ny-nx;
+      x=String(x).toLowerCase(); y=String(y).toLowerCase();
+      return x<y?(sortAsc?-1:1):x>y?(sortAsc?1:-1):0;
+    });
+  }
+
+  const mobile = window.matchMedia("(max-width:768px)").matches;
+  const tbody=document.querySelector("#table tbody");
+  let html="";
+  if(mobile){
+    list.forEach(({it,i})=>{
+      html+=`<div class="mobile-card"><h4>${esc(it.name)}</h4>
+        <p>${esc(it.desc)} | ${esc(it.pack)}</p>
+        <p>MRP: ${esc(it.mrp)} | Rate: ${esc(it.rate)} | Scheme: ${esc(it.scheme)}</p>
+        <input type="number" inputmode="numeric" min="0" placeholder="Order Quantity" data-i="${i}" value="${esc(qty[it.key]||"")}"></div>`;
+    });
+    $("mobileView").innerHTML=html; tbody.innerHTML="";
+  } else {
+    list.forEach(({it,i})=>{
+      html+=`<tr><td>${esc(it.name)}</td><td>${esc(it.desc)}</td><td>${esc(it.pack)}</td>
+        <td>${esc(it.mrp)}</td><td>${esc(it.rate)}</td><td>${esc(it.scheme)}</td>
+        <td><input type="number" min="0" data-i="${i}" value="${esc(qty[it.key]||"")}"></td></tr>`;
+    });
+    tbody.innerHTML=html; $("mobileView").innerHTML="";
+  }
+  calcTotal();
+}
+
+document.addEventListener("input", e=>{
+  const t=e.target;
+  if(t.dataset && t.dataset.i!==undefined){
+    const it=items[+t.dataset.i];
+    if(t.value && parseFloat(t.value)>0) qty[it.key]=t.value; else delete qty[it.key];
+    calcTotal(); saveDraft();
+  }
+});
+
+document.querySelectorAll("th[data-f]").forEach(th=>th.onclick=()=>{
+  const f=th.dataset.f;
+  if(sortField===f) sortAsc=!sortAsc; else {sortField=f; sortAsc=true;}
+  render();
+});
+
+let st; $("searchBox").addEventListener("input",()=>{clearTimeout(st); st=setTimeout(()=>{render();saveDraft();},200);});
+window.matchMedia("(max-width:768px)").addEventListener("change",render);
+
+function orderLines(){
+  return items.filter(it=>qty[it.key] && parseFloat(qty[it.key])>0)
+    .map(it=>({it, q:parseFloat(qty[it.key]), amt:parseFloat(qty[it.key])*(parseFloat(it.rate)||0)}));
+}
+function calcTotal(){
+  $("totalAmount").innerText = orderLines().reduce((s,l)=>s+l.amt,0).toFixed(2);
+}
+
+/* ---------- PDF + WHATSAPP ---------- */
+async function sendWhatsApp(){
+  const lines=orderLines();
+  if(!lines.length){ alert("कृपया order quantity टाका"); return; }
+  const total=lines.reduce((s,l)=>s+l.amt,0);
+
+  const { jsPDF } = window.jspdf;
+  const doc=new jsPDF();
+  doc.text("Medicine Order",14,15);
+  doc.setFontSize(9);
+  doc.text(new Date().toLocaleString(),14,21);
+  doc.autoTable({
+    startY:25,
+    head:[["Product","Description","Rate","Qty","Amount"]],
+    body:lines.map(l=>[l.it.name,l.it.desc,l.it.rate,l.q,l.amt.toFixed(2)]),
+    foot:[["","","","Total (Rs.)",total.toFixed(2)]],
+    styles:{fontSize:9}
+  });
+
+  const file=new File([doc.output("blob")],"Medicine_Order.pdf",{type:"application/pdf"});
+
+  // Android: share only the PDF (pick WhatsApp from share sheet)
+  if(navigator.canShare && navigator.canShare({files:[file]})){
+    try{ await navigator.share({files:[file]}); return; }
+    catch(e){ if(e.name==="AbortError") return; }
+  }
+  // Fallback: download PDF + open WhatsApp chat (no text); attach the PDF manually
+  doc.save("Medicine_Order.pdf");
+  window.open(`https://wa.me/${WHATSAPP_PHONE}`,"_blank");
+}
+$("sendBtn").onclick=sendWhatsApp;
+
+/* ---------- STARTUP ---------- */
+window.addEventListener("load",()=>{
+  const saved=lsGet(DATA_KEY);
+  if(saved && saved.items && saved.items.length){
+    items=saved.items;
+    $("info").innerText=`${items.length} products loaded (${saved.fileName||"saved list"})`;
+  }
+  const d=lsGet(DRAFT_KEY);
+  if(d && d.qty && items.length){ qty=d.qty; $("searchBox").value=d.searchText||""; }
+  render(); showDraftPrompt();
+  if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+});
+</script>
+</body>
+</html>
